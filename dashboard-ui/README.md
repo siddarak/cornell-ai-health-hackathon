@@ -4,12 +4,17 @@ Clinician-facing ED dashboard built with **Streamlit** for triage and model-driv
 
 ## What It Does
 - Uses a **card-first patient queue** with gradient status tiers (`Severe`, `Risky`, `Stable`).
+- Applies percentile banding from model scores in `0-1`:
+  - `red`: highest 15% (`>85th percentile`)
+  - `yellow`: `65th-85th percentile`
+  - `green`: lowest 65% (`<=65th percentile`)
 - Supports uploading a **cherry-picked patient CSV** from your model pipeline.
-- Shows a fixed right panel with:
-  - patient banner and workflow stage
-  - vitals and complaint summary
-  - ML risk summary, confidence, and top drivers
-  - quick actions and ER-wide analytics
+- Uses a single **Open** action on each patient card to launch a popup with:
+  - key patient snapshot
+  - exact model score + percentile
+  - model rationale/top drivers
+  - recommended next action
+- Keeps queue height fixed and scrollable so the page does not grow indefinitely.
 - Includes optional compact table mode with status-gradient styling.
 
 ## Data Expectations
@@ -19,8 +24,10 @@ Preferred fields include:
 - identifiers: `patient_id`, `name`
 - triage context: `age`, `gender`, `arrival_time`, `wait_minutes`, `triage_level`, `chief_complaint`
 - vitals: `pulse`, `temp`, `resp`, `sys_bp`, `dia_bp`, `o2_sat`
-- ML outputs: `ml_priority_score`, `ml_risk_flags`, `predicted_disposition`,
+- ML outputs: `risk_score` (preferred), `ml_risk_flags`, `predicted_disposition`,
   `recommended_next_action`, `ml_top_factors`, `ml_confidence`, `workflow_stage`
+
+If `risk_score` is missing, the app generates a temporary fallback score for UI testing only.
 
 ## Run Locally
 1. Install dependencies:

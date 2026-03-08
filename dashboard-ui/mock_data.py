@@ -61,12 +61,12 @@ NEXT_ACTIONS = [
 WORKFLOW_STAGES = ["Intake", "Triage", "Provider", "Orders", "Disposition"]
 
 
-def _pick_workflow_stage(priority_score: float) -> str:
-    if priority_score >= 8.0:
+def _pick_workflow_stage(risk_score: float) -> str:
+    if risk_score >= 0.85:
         return "Provider"
-    if priority_score >= 6.0:
+    if risk_score >= 0.65:
         return "Triage"
-    if priority_score >= 4.0:
+    if risk_score >= 0.40:
         return "Orders"
     return "Intake"
 
@@ -95,7 +95,7 @@ def generate_patient_data(n: int = 50, seed: int = 42) -> pd.DataFrame:
         o2 = rng.randint(86, 100)
 
         triage_level = rng.randint(1, 5)
-        priority_score = round(rng.uniform(1.0, 10.0), 1)
+        risk_score = round(rng.uniform(0.03, 0.98), 3)
 
         risk_count = rng.choice([1, 1, 2, 2, 3])
         risk_flags = ", ".join(rng.sample(RISK_FLAG_OPTIONS, k=risk_count))
@@ -125,13 +125,13 @@ def generate_patient_data(n: int = 50, seed: int = 42) -> pd.DataFrame:
                 "sys_bp": sys_bp,
                 "dia_bp": dia_bp,
                 "o2_sat": o2,
-                "ml_priority_score": priority_score,
+                "risk_score": risk_score,
                 "ml_risk_flags": risk_flags,
                 "predicted_disposition": rng.choice(DISPOSITIONS),
                 "recommended_next_action": rng.choice(NEXT_ACTIONS),
                 "ml_top_factors": " | ".join(top_factors),
                 "ml_confidence": round(rng.uniform(0.58, 0.97), 2),
-                "workflow_stage": _pick_workflow_stage(priority_score),
+                "workflow_stage": _pick_workflow_stage(risk_score),
             }
         )
 

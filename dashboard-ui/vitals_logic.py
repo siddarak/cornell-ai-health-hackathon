@@ -1,27 +1,19 @@
-"""Clinical and display status helpers for the ER dashboard."""
+"""Display logic for percentile-based ED risk tiers."""
 
 from __future__ import annotations
 
 
-def _abnormal_count(pulse: int, temp: float, resp: int, sys_bp: int, dia_bp: int, o2_sat: int) -> int:
-    flags = [
-        not (60 <= pulse <= 100),
-        not (97.0 <= temp <= 99.0),
-        not (12 <= resp <= 20),
-        not (90 <= sys_bp <= 140),
-        not (55 <= dia_bp <= 90),
-        o2_sat < 94,
-    ]
-    return sum(flags)
+def get_status_tier_from_percentile(risk_percentile: float) -> str:
+    """Map prediction percentile to ED color tier.
 
-
-def get_status_tier(priority_score: float, pulse: int, temp: float, resp: int, sys_bp: int, dia_bp: int, o2_sat: int) -> str:
-    """Return red/yellow/green tier using both ML score and vitals context."""
-    abn = _abnormal_count(pulse, temp, resp, sys_bp, dia_bp, o2_sat)
-
-    if priority_score >= 8.0 or abn >= 3:
+    Schema:
+    - Highest 15% => red (>85th percentile)
+    - 65th to 85th => yellow
+    - Lowest 65% => green
+    """
+    if risk_percentile > 85:
         return "red"
-    if priority_score >= 5.0 or abn >= 1:
+    if risk_percentile > 65:
         return "yellow"
     return "green"
 
