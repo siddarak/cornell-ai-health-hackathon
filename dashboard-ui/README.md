@@ -1,28 +1,39 @@
-# ER Intel Dashboard
+# ER Clinical Intelligence Dashboard
 
-This is a high-density, clinician-centric Emergency Department dashboard built with **Streamlit**.
+Clinician-facing ED dashboard built with **Streamlit** for triage and model-driven decision support.
 
-## Features
-- **5-Zone Layout**: Top Bar stats, Left Rail filters, Center Patient Table, and Right Detail Panel.
-- **Clinical Logic**: Vitals validation based on NHAMCS 2022 dataset analysis.
-- **Design Principles**: Data-Ink Maximization, Progressive Disclosure, and Redundant Encoding.
-- **AI Insights**: Glass-Box AI rationale for patient priority scores.
+## What It Does
+- Uses a **card-first patient queue** with gradient status tiers (`Severe`, `Risky`, `Stable`).
+- Supports uploading a **cherry-picked patient CSV** from your model pipeline.
+- Shows a fixed right panel with:
+  - patient banner and workflow stage
+  - vitals and complaint summary
+  - ML risk summary, confidence, and top drivers
+  - quick actions and ER-wide analytics
+- Includes optional compact table mode with status-gradient styling.
 
-## How to Run locally
-1. Ensure you have the dependencies installed:
+## Data Expectations
+`app.py` normalizes uploaded files into a standard schema. If columns are missing, defaults are applied.
+
+Preferred fields include:
+- identifiers: `patient_id`, `name`
+- triage context: `age`, `gender`, `arrival_time`, `wait_minutes`, `triage_level`, `chief_complaint`
+- vitals: `pulse`, `temp`, `resp`, `sys_bp`, `dia_bp`, `o2_sat`
+- ML outputs: `ml_priority_score`, `ml_risk_flags`, `predicted_disposition`,
+  `recommended_next_action`, `ml_top_factors`, `ml_confidence`, `workflow_stage`
+
+## Run Locally
+1. Install dependencies:
    ```bash
    pip install streamlit pandas plotly numpy
    ```
-2. Navigate to this directory:
+2. Start dashboard:
    ```bash
    cd dashboard-ui
-   ```
-3. Run the Streamlit app:
-   ```bash
    streamlit run app.py
    ```
 
-## File Structure
-- `app.py`: Main dashboard interface.
-- `vitals_logic.py`: Clinical range validation and triage coloring.
-- `mock_data.py`: Generates realistic patient records for demonstration.
+## Files
+- `app.py`: Main UI, uploaded-data normalization, queue/panel rendering.
+- `vitals_logic.py`: Status-tier engine + UI color/gradient tokens.
+- `mock_data.py`: Synthetic patient generator with ML-style output fields.

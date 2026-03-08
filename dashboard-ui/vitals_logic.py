@@ -1,45 +1,54 @@
-"""
-Vitals Logic: Clinical range validation based on NHAMCS ED analysis.
-"""
+"""Clinical and display status helpers for the ER dashboard."""
 
-def get_vitals_status(age, pulse, temp, resp, sys, dia, o2):
-    """
-    Returns a status dictionary for patient vitals.
-    Logic derived from ed2022_normal_vitals_analysis.ipynb.
-    """
-    status = {
-        "pulse": "Normal" if 60 <= pulse <= 100 else "Abnormal",
-        "temp": "Normal" if 97.0 <= temp <= 99.0 else "Abnormal",
-        "resp": "Normal" if 12 <= resp <= 20 else "Abnormal",
-        "systolic": "Normal" if 90 <= sys <= 120 else "Abnormal",
-        "diastolic": "Normal" if 60 <= dia <= 80 else "Abnormal",
-        "o2": "Normal" if o2 >= 95 else "Abnormal"
-    }
-    
-    # Calculate overall clinical status
-    abnormal_count = list(status.values()).count("Abnormal")
-    if abnormal_count >= 3:
-        status["overall"] = "CRITICAL"
-        status["color"] = "#ef4444" # Red
-        status["icon"] = "🔴"
-    elif abnormal_count > 0:
-        status["overall"] = "URGENT"
-        status["color"] = "#f59e0b" # Yellow/Amber
-        status["icon"] = "🟡"
-    else:
-        status["overall"] = "STABLE"
-        status["color"] = "#10b981" # Green
-        status["icon"] = "🟢"
-        
-    return status
+from __future__ import annotations
 
-def get_triage_color(level):
-    """Maps NHAMCS triage levels to UI colors."""
+
+def _abnormal_count(pulse: int, temp: float, resp: int, sys_bp: int, dia_bp: int, o2_sat: int) -> int:
+    flags = [
+        not (60 <= pulse <= 100),
+        not (97.0 <= temp <= 99.0),
+        not (12 <= resp <= 20),
+        not (90 <= sys_bp <= 140),
+        not (55 <= dia_bp <= 90),
+        o2_sat < 94,
+    ]
+    return sum(flags)
+
+
+def get_status_tier(priority_score: float, pulse: int, temp: float, resp: int, sys_bp: int, dia_bp: int, o2_sat: int) -> str:
+    """Return red/yellow/green tier using both ML score and vitals context."""
+    abn = _abnormal_count(pulse, temp, resp, sys_bp, dia_bp, o2_sat)
+
+    if priority_score >= 8.0 or abn >= 3:
+        return "red"
+    if priority_score >= 5.0 or abn >= 1:
+        return "yellow"
+    return "green"
+
+
+def get_status_ui(tier: str) -> dict:
+    """UI tokens for gradient cards and badges."""
     mapping = {
-        1: ("IMMEDIATE", "#ef4444", "🔴"),
-        2: ("EMERGENT", "#f97316", "🟠"),
-        3: ("URGENT", "#f59e0b", "🟡"),
-        4: ("SEMI-URGENT", "#10b981", "🟢"),
-        5: ("NON-URGENT", "#6b7280", "⚪")
+        "red": {
+            "label": "Severe",
+            "badge_bg": "#fee2e2",
+            "badge_fg": "#b91c1c",
+            "gradient": "linear-gradient(90deg, rgba(239,68,68,0.18) 0%, rgba(255,255,255,0.96) 50%)",
+            "dot": "#ef4444",
+        },
+        "yellow": {
+            "label": "Risky",
+            "badge_bg": "#fef3c7",
+            "badge_fg": "#b45309",
+            "gradient": "linear-gradient(90deg, rgba(245,158,11,0.16) 0%, rgba(255,255,255,0.96) 50%)",
+            "dot": "#f59e0b",
+        },
+        "green": {
+            "label": "Stable",
+            "badge_bg": "#dcfce7",
+            "badge_fg": "#166534",
+            "gradient": "linear-gradient(90deg, rgba(16,185,129,0.14) 0%, rgba(255,255,255,0.96) 50%)",
+            "dot": "#10b981",
+        },
     }
-    return mapping.get(level, ("UNKNOWN", "#374151", "❓"))
+    return mapping.get(tier, mapping["yellow"])
