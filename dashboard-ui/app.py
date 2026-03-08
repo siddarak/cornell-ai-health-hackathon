@@ -195,6 +195,22 @@ EXPECTED_COLUMNS = [
     "workflow_stage",
 ]
 
+AVAILABLE_LABS = [
+    "CBC",
+    "CMP",
+    "BMP",
+    "Lactate",
+    "Troponin",
+    "BNP",
+    "D-dimer",
+    "CRP",
+    "Procalcitonin",
+    "PT/INR",
+    "ABG",
+    "Blood Culture",
+    "Urinalysis",
+]
+
 
 def _find_col(df: pd.DataFrame, options: Iterable[str]) -> str | None:
     cols = {c.lower(): c for c in df.columns}
@@ -241,6 +257,39 @@ def _default_risk_score(triage_level: pd.Series, wait_minutes: pd.Series) -> pd.
     triage_component = ((6 - triage_level) / 5).clip(lower=0.0, upper=1.0)
     wait_component = (wait_minutes / 240.0).clip(lower=0.0, upper=1.0)
     return (0.15 + 0.60 * triage_component + 0.25 * wait_component).clip(lower=0.0, upper=1.0)
+
+
+def _series_with_current(
+    current: float,
+    *,
+    points: int,
+    scale: float,
+    min_val: float,
+    max_val: float,
+    rng: np.random.Generator,
+) -> list[float]:
+    past = current + rng.normal(0.0, scale, points - 1)
+    vals = np.append(past, current)
+    return np.clip(vals, min_val, max_val).round(2).tolist()
+
+
+def build_vitals_trend_df(patient_row: pd.Series, points: int = 8) -> pd.DataFrame:
+    patient_id = str(patient_row["patient_id"])
+    seed = sum((i + 1) * ord(ch) for i, ch in enumerate(patient_id))
+    rng = np.random.default_rng(seed)
+    time_labels = [f"T-{(points - 1 - i) * 5}m" for i in range(points - 1)] + ["Now"]
+
+    trend = pd.DataFrame(
+        {
+            "time": time_labels,
+            "Pulse": _series_with_current(float(patient_row["pulse"]), points=points, scale=3.8, min_val=40, max_val=180, rng=rng),
+            "Resp": _series_with_current(float(patient_row["resp"]), points=points, scale=1.4, min_val=6, max_val=40, rng=rng),
+            "SpO2": _series_with_current(float(patient_row["o2_sat"]), points=points, scale=0.9, min_val=80, max_val=100, rng=rng),
+            "Systolic BP": _series_with_current(float(patient_row["sys_bp"]), points=points, scale=4.5, min_val=70, max_val=220, rng=rng),
+            "Temperature": _series_with_current(float(patient_row["temp"]), points=points, scale=0.2, min_val=94, max_val=106, rng=rng),
+        }
+    )
+    return trend
 
 
 def normalize_uploaded_df(raw_df: pd.DataFrame) -> pd.DataFrame:
@@ -409,6 +458,7 @@ def apply_tile_gradient(tile_key: str, ui: dict) -> None:
             border-radius: 14px;
             padding: 10px 12px;
             margin-bottom: 8px;
+            position: relative;
         }}
         </style>
         """,
@@ -416,10 +466,39 @@ def apply_tile_gradient(tile_key: str, ui: dict) -> None:
     )
 
 
-@st.dialog("Patient Severity Detail")
+def apply_tile_click_overlay(click_key: str) -> None:
+    st.markdown(
+        f"""
+        <style>
+        .st-key-{click_key} {{
+            height: 0;
+            margin: 0;
+            padding: 0;
+        }}
+        .st-key-{click_key} button {{
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            z-index: 25;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            margin: 0;
+            padding: 0;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+@st.dialog("Patient Severity Detail", width="large")
 def show_patient_modal(patient_row: pd.Series) -> None:
     ui = get_status_ui(str(patient_row["status_tier"]))
     risk_percentile = float(patient_row["risk_percentile"])
+    safe_patient_key = css_safe_key(patient_row["patient_id"])
 
     st.markdown(f"### {patient_row['name']}")
     st.caption(
@@ -445,8 +524,27 @@ def show_patient_modal(patient_row: pd.Series) -> None:
         st.caption("Recommended Action")
         st.write(f"**{patient_row['recommended_next_action']}**")
     with s4.container(border=True):
-        st.caption("Vitals")
+        st.caption("Current Vitals")
         st.write(str(patient_row["vitals_summary"]))
+
+    st.markdown("**Vitals Trend**")
+    trend_df = build_vitals_trend_df(patient_row)
+    metric_options = ["Pulse", "Resp", "SpO2", "Systolic BP", "Temperature"]
+    selected_metric = st.selectbox(
+        "Metric",
+        options=metric_options,
+        index=0,
+        key=f"vital_metric_{safe_patient_key}",
+    )
+    fig_vitals = px.line(trend_df, x="time", y=selected_metric, markers=True)
+    fig_vitals.update_layout(
+        height=220,
+        margin=dict(l=10, r=10, t=20, b=10),
+        xaxis_title="",
+        yaxis_title=selected_metric,
+    )
+    fig_vitals.update_traces(line_color="#1d4ed8", marker_size=6)
+    st.plotly_chart(fig_vitals, use_container_width=True)
 
     st.markdown("**Model Rationale**")
     st.write(
@@ -461,6 +559,69 @@ def show_patient_modal(patient_row: pd.Series) -> None:
     if flags:
         flag_html = "".join([f"<span class='flag-chip'>{f}</span>" for f in flags])
         st.markdown("<div class='chip-title'>Risk Flags</div>" + flag_html, unsafe_allow_html=True)
+
+    st.markdown("**Lab Orders**")
+    patient_id = str(patient_row["patient_id"])
+    current_orders = st.session_state.patient_lab_orders.get(patient_id, [])
+    already_ordered_tests = [entry["test"] for entry in current_orders]
+    available_to_order = [lab for lab in AVAILABLE_LABS if lab not in already_ordered_tests]
+
+    st.caption("Click any test below to place an order.")
+    quick_cols = st.columns(3)
+    if available_to_order:
+        for idx, lab in enumerate(available_to_order):
+            with quick_cols[idx % 3]:
+                if st.button(
+                    f"Order {lab}",
+                    key=f"order_btn_{safe_patient_key}_{css_safe_key(lab)}",
+                    use_container_width=True,
+                ):
+                    ordered_at = datetime.now().strftime("%H:%M:%S")
+                    new_entry = {"test": lab, "status": "Ordered", "ordered_at": ordered_at}
+                    st.session_state.patient_lab_orders[patient_id] = current_orders + [new_entry]
+                    st.rerun()
+    else:
+        st.write("All available demo labs are already ordered.")
+
+    refreshed_orders = st.session_state.patient_lab_orders.get(patient_id, [])
+    st.caption("Ordered Tests")
+    if refreshed_orders:
+        for idx, entry in enumerate(refreshed_orders):
+            r1, r2, r3 = st.columns([3.0, 1.5, 1.2])
+            with r1:
+                st.write(f"**{entry['test']}**")
+            with r2:
+                st.caption(f"{entry['status']} • {entry['ordered_at']}")
+            with r3:
+                if st.button("Remove", key=f"remove_lab_{safe_patient_key}_{idx}", use_container_width=True):
+                    remaining = [e for j, e in enumerate(refreshed_orders) if j != idx]
+                    st.session_state.patient_lab_orders[patient_id] = remaining
+                    st.rerun()
+        if st.button("Clear All Orders", key=f"clear_all_labs_{safe_patient_key}", use_container_width=True):
+            st.session_state.patient_lab_orders[patient_id] = []
+            st.rerun()
+    else:
+        st.write("No labs ordered yet. Use quick-order buttons above.")
+
+    st.markdown("**Clinical Notes**")
+    existing_note = st.session_state.patient_notes.get(patient_id, "")
+    note_key = f"note_input_{safe_patient_key}"
+    note_text = st.text_area(
+        "Add or update note for this patient",
+        value=existing_note,
+        height=130,
+        key=note_key,
+        placeholder="Enter assessment notes, follow-up plan, and handoff details...",
+    )
+    n1, n2 = st.columns(2)
+    with n1:
+        if st.button("Save Note", use_container_width=True):
+            st.session_state.patient_notes[patient_id] = note_text.strip()
+            st.success("Note saved for this patient.")
+    with n2:
+        if st.button("Clear Note", use_container_width=True):
+            st.session_state.patient_notes[patient_id] = ""
+            st.rerun()
     st.caption("Decision support only. Use with clinician judgment.")
 
     if st.button("Close", use_container_width=True):
@@ -469,22 +630,18 @@ def show_patient_modal(patient_row: pd.Series) -> None:
 
 
 # -----------------------------
-# Data + Sidebar Controls
+# Demo Data
 # -----------------------------
-with st.sidebar:
-    st.markdown("### Data Source")
-    uploaded = st.file_uploader("Upload cherry-picked patient CSV", type=["csv"])
-
-if uploaded is not None:
-    uploaded_df = pd.read_csv(uploaded, low_memory=False)
-    patients_df = normalize_uploaded_df(uploaded_df)
-else:
-    patients_df = generate_patient_data(55)
+patients_df = generate_patient_data(55)
 
 patients_df = add_risk_bands(patients_df)
 
 if "modal_patient_id" not in st.session_state:
     st.session_state.modal_patient_id = None
+if "patient_notes" not in st.session_state:
+    st.session_state.patient_notes = {}
+if "patient_lab_orders" not in st.session_state:
+    st.session_state.patient_lab_orders = {}
 
 with st.sidebar:
     st.markdown("### Queue Filters")
@@ -495,11 +652,14 @@ with st.sidebar:
     disposition_filter = st.multiselect("Predicted Disposition", dispositions, default=dispositions)
 
     min_risk = st.slider("Minimum Model Score", min_value=0.00, max_value=1.00, value=0.00, step=0.01)
-    compact_tiles = st.toggle("Compact Tiles", value=True)
-    max_cards = st.slider("Visible Queue Cards", min_value=6, max_value=30, value=14, step=1)
-    queue_height = st.slider("Queue Height", min_value=380, max_value=900, value=560, step=20)
 
     st.caption("Banding schema: Red >85th percentile, Yellow 65-85th, Green <=65th.")
+
+
+# Fixed queue layout settings (max density / max viewport)
+compact_tiles = True
+max_cards = 30
+queue_height = 900
 
 
 # -----------------------------
@@ -525,13 +685,23 @@ queue_df = queue_df.sort_values(["risk_score", "wait_minutes"], ascending=[False
 st.title("ER Clinical Intelligence Dashboard")
 st.markdown("<div class='queue-note'>Model output is 0-1 and mapped to percentile-based severity bands for queue coloring.</div>", unsafe_allow_html=True)
 
-k1, k2, k3, k4, k5 = st.columns(5)
 red_count = int((patients_df["status_tier"] == "red").sum())
 yellow_count = int((patients_df["status_tier"] == "yellow").sum())
 green_count = int((patients_df["status_tier"] == "green").sum())
 score_85 = float(np.percentile(patients_df["risk_score"], 85)) if len(patients_df) else 0.0
-median_wait = int(patients_df["wait_minutes"].median()) if len(patients_df) else 0
+provider_clean = (
+    patients_df["assigned_provider"]
+    .astype(str)
+    .str.strip()
+)
+team_on_round_today = int(
+    provider_clean[
+        ~provider_clean.str.lower().isin({"", "unassigned", "none", "nan"})
+    ]
+    .nunique()
+)
 
+k1, k2, k3, k4, k5, k6 = st.columns(6)
 with k1:
     st.markdown(f"<div class='kpi'><div class='small-muted'>Patients</div><div style='font-size:1.3rem;font-weight:700'>{len(patients_df)}</div></div>", unsafe_allow_html=True)
 with k2:
@@ -542,6 +712,8 @@ with k4:
     st.markdown(f"<div class='kpi'><div class='small-muted'>Stable (Green)</div><div style='font-size:1.3rem;font-weight:700;color:#166534'>{green_count}</div></div>", unsafe_allow_html=True)
 with k5:
     st.markdown(f"<div class='kpi'><div class='small-muted'>85th Score Cutoff</div><div style='font-size:1.3rem;font-weight:700'>{score_85:.3f}</div></div>", unsafe_allow_html=True)
+with k6:
+    st.markdown(f"<div class='kpi'><div class='small-muted'>Team On Round Today</div><div style='font-size:1.3rem;font-weight:700'>{team_on_round_today}</div></div>", unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -562,10 +734,15 @@ with queue_col:
             ui = get_status_ui(str(row["status_tier"]))
             flags = [f.strip() for f in str(row["ml_risk_flags"]).split(",") if f.strip()][:3]
             top_factors = split_top_factors(row["ml_top_factors"])
-            tile_key = f"tile_{css_safe_key(row['patient_id'])}"
+            safe_patient_key = css_safe_key(row["patient_id"])
+            tile_key = f"tile_{safe_patient_key}"
+            click_key = f"click_{safe_patient_key}"
             apply_tile_gradient(tile_key, ui)
+            apply_tile_click_overlay(click_key)
 
             with st.container(border=False, key=tile_key):
+                if st.button(f"Open {row['patient_id']}", key=click_key, use_container_width=True):
+                    st.session_state.modal_patient_id = row["patient_id"]
                 if compact_tiles:
                     h1, h2, h3 = st.columns([5.2, 1.5, 1.1])
                     with h1:
@@ -596,8 +773,6 @@ with queue_col:
                             unsafe_allow_html=True,
                         )
                         st.caption(f"{row['risk_percentile']:.1f}th")
-                        if st.button("Open", key=f"open_{row['patient_id']}", use_container_width=True):
-                            st.session_state.modal_patient_id = row["patient_id"]
 
                     m1, m2, m3, m4, m5 = st.columns(5)
                     with m1:
@@ -614,7 +789,10 @@ with queue_col:
                         st.markdown(f"**{int(row['wait_minutes'])}m**")
                     with m5:
                         st.caption("Complaint")
-                        st.markdown(f"**{str(row['chief_complaint'])[:12]}**")
+                        st.markdown(
+                            f"<div style='font-size:0.82rem;font-weight:700;color:#0f172a;line-height:1.15'>{row['chief_complaint']}</div>",
+                            unsafe_allow_html=True,
+                        )
                 else:
                     h1, h2, h3 = st.columns([4.4, 1.6, 1.2])
                     with h1:
@@ -641,8 +819,6 @@ with queue_col:
                             unsafe_allow_html=True,
                         )
                         st.caption(f"{row['risk_percentile']:.1f}th")
-                        if st.button("Open", key=f"open_{row['patient_id']}", use_container_width=True):
-                            st.session_state.modal_patient_id = row["patient_id"]
 
                     m1, m2, m3, m4 = st.columns(4)
                     with m1.container(border=True):
@@ -695,8 +871,6 @@ with queue_col:
 
 with dept_col:
     st.subheader("Department Snapshot")
-
-    st.markdown(f"<div class='section-card'><div class='small-muted'>Median Wait</div><div style='font-size:1.25rem;font-weight:700'>{median_wait} min</div></div>", unsafe_allow_html=True)
 
     occ = pd.DataFrame(
         {
